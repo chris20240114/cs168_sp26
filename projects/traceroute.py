@@ -123,6 +123,57 @@ class UDP:
 
 # TODO feel free to add helper functions if you'd like
 
+def extract_router_ip(packet: bytes) -> str | None:
+    """ Extract the router IP from an ICMP response packet."""
+    if len(packet) < 28:
+        return None
+    try:
+        ipv4 = IPv4(packet)
+    except Exception:
+        return None
+    if ipv4.proto != util.IPPROTO_ICMP:
+        return None
+    
+    # Find ICMP header offset using IPv4 header length
+    icmp_offset = ipv4.header_len
+    if len(packet) < icmp_offset + 4:
+        return None
+    try:
+        icmp = ICMP(packet[icmp_offset:])
+    except Exception:
+        return None
+    if icmp.type == 11 and icmp.code != 0:
+        return None
+    if icmp.type not in [3, 11]:
+        return None
+    
+    return ipv4.src
+
+def collect_responses_at_ttl(sendsock: util.Socket, recvsock: util.Socket, destination: str, ttl: int) -> list[str]:
+    """ Send probes with the given TTL and collect responding router IPs."""
+    routers = set()
+    sendsock.set_ttl(ttl)
+    
+    # Send all probes
+    for _ in range(PROBE_ATTEMPT_COUNT):
+        sendsock.sendto(b"Potato.", (destination, TRACEROUTE_PORT_NUMBER))
+    
+    # Collect responses (one per probe, up to PROBE_ATTEMPT_COUNT)
+    for _ in range(PROBE_ATTEMPT_COUNT):
+        if not recvsock.recv_select():
+            break
+        
+        try:
+            packet, _ = recvsock.recvfrom()
+            router = extract_router_ip(packet)
+            if router is not None:
+                routers.add(router)
+        except Exception:
+            pass
+    
+    return sorted(list(routers))
+
+
 def traceroute(sendsock: util.Socket, recvsock: util.Socket, ip: str) \
         -> list[list[str]]:
     """ Run traceroute and returns the discovered path.
@@ -148,29 +199,13 @@ def traceroute(sendsock: util.Socket, recvsock: util.Socket, ip: str) \
     reached_destination = False
     
     for ttl in range(1, TRACEROUTE_MAX_TTL + 1):
-        routers_at_current_ttl = set()
-        sendsock.set_ttl(ttl)
-
-        for attempt_num in range(PROBE_ATTEMPT_COUNT):
-            sendsock.sendto(payload, (ip, TRACEROUTE_PORT_NUMBER))
-            if recvsock.recv_select():
-                try:
-                    response_packet, sender_address = recvsock.recvfrom()
-                    responding_router_ip = IPv4(response_packet).src
-                    routers_at_current_ttl.add(responding_router_ip)
-                    if responding_router_ip == ip:
-                        reached_destination = True
-                        
-                except Exception:
-                    continue
+        hops = collect_responses_at_ttl(sendsock, recvsock, ip, ttl)
+        results.append(hops)
+        util.print_result(hops, ttl)
         
-        routers_discovered = list(routers_at_current_ttl)
-        results.append(routers_discovered)
-        
-        util.print_result(routers_discovered, ttl)
-        
-        if reached_destination:
+        if ip in hops:
             break
+    
     return results
 
 
