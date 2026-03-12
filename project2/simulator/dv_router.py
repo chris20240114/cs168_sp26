@@ -119,7 +119,15 @@ class DVRouter(DVRouterBase):
         ##### Begin Stages 3, 6, 7, 8, 10 #####
         for port in self.ports.get_all_ports():
             for entry in self.table.values():
-                self.send_route(port, entry.dst, entry.latency)
+                if self.SPLIT_HORIZON and entry.port == port:
+                    continue
+                latency = entry.latency
+                if self.POISON_REVERSE and entry.port == port:
+                    latency = INFINITY
+                elif latency > INFINITY:
+                    latency = INFINITY
+                else:
+                    self.send_route(port, entry.dst, latency)
         ##### End Stages 3, 6, 7, 8, 10 #####
 
     def expire_routes(self):
