@@ -99,7 +99,9 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stage 2 #####
-
+        entry = self.table.get(packet.dst)
+        if entry and entry.latency < INFINITY:
+            self.send(packet, port=entry.port)
         ##### End Stage 2 #####
 
     def send_routes(self, force=False, single_port=None):
@@ -115,7 +117,9 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stages 3, 6, 7, 8, 10 #####
-
+        for port in self.ports.get_all_ports():
+            for entry in self.table.values():
+                self.send_route(port, entry.dst, entry.latency)
         ##### End Stages 3, 6, 7, 8, 10 #####
 
     def expire_routes(self):
@@ -125,7 +129,9 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stages 5, 9 #####
-
+        for destination in list(self.table):
+                if self.table[destination].has_expired:
+                    self.table.pop(destination)
         ##### End Stages 5, 9 #####
 
     def handle_route_advertisement(self, route_dst, route_latency, port):
@@ -139,7 +145,24 @@ class DVRouter(DVRouterBase):
         """
         
         ##### Begin Stages 4, 10 #####
-
+        link_latency = self.ports.get_latency(port)
+        total_latency = route_latency + link_latency
+        
+        current_entry = self.table.get(route_dst)
+        
+        should_update = (
+            current_entry is None or                    # Rule 1: no route yet
+            current_entry.port == port or              # Rule 2: from current next-hop
+            total_latency < current_entry.latency      # Rule 1: strictly better
+        )
+        
+        if should_update:
+            self.table[route_dst] = TableEntry(
+                dst=route_dst,
+                port=port,
+                latency=total_latency,
+                expire_time=api.current_time() + self.ROUTE_TTL
+            )
         ##### End Stages 4, 10 #####
 
     def handle_link_up(self, port, latency):
